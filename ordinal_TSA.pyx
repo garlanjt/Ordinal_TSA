@@ -389,5 +389,151 @@ def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int
         for kk in range(wl_fact):
             norm_pmf[kk] = pmf[kk] / total
         window_weighted_pes[jj] = entropy(norm_pmf) / norm
+
     return window_weighted_pes
 
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+cdef step_windowed_permutation_entropy(double[:,:] data, int  window_size, int window_steps, int dim,int max_window_size=-1, int step =1, int w =0):
+    cdef int i,ii, jj, kk, ll
+    cdef int wl_fact = c_factorial(dim)
+    cdef int T =data.shape[0]
+    cdef int num_TS=1
+    cdef int[:,:] data_mask = np.ones((T,num_TS), dtype='int32')
+    cdef int patt_time = data.shape[0]-step*(dim-1)
+    if max_window_size ==-1:
+        max_window_size = window_size
+
+    cdef double[:,:] weights = np.zeros((patt_time, num_TS), dtype='float64')
+    cdef int[:,:] permutations = np.zeros((patt_time, num_TS), dtype='int32')
+    cdef int[:,:] patt_mask = np.zeros((patt_time, num_TS), dtype='int32')
+    permutations, patt_mask, patt_time, weights=ordinal_patt_array(data, data_mask, dim=dim,
+                                                                       step=step,weights=w)
+
+    cdef int num_windows = (patt_time - max_window_size) / window_steps + 1
+
+    cdef double[:] window_weighted_pes = np.zeros(num_windows,dtype='float')
+    cdef double norm = log(wl_fact)/log(2.0)
+
+    # Calculate WPE of first window
+    cdef double total = np.asarray(weights[max_window_size-window_size:max_window_size]).sum()
+    cdef double[:] pmf = np.zeros(wl_fact,dtype='float')
+    cdef double[:] norm_pmf = np.zeros(wl_fact,dtype='float')
+    cdef int p,calcIndex
+    calcIndex = num_TS-1
+
+    for ii in range(window_size):
+        p = permutations[max_window_size-window_size+ii,calcIndex]
+        pmf[p] += weights[max_window_size-window_size+ii,calcIndex]
+
+    for kk in range(wl_fact):
+        norm_pmf[kk] = pmf[kk]/total
+    window_weighted_pes[0]= entropy(norm_pmf)/ norm
+
+
+    # Calculate WPE of next windows
+    cdef double weightToRemove, weightToAdd
+    cdef int permToRemove, permToAdd
+
+    cdef double[:] weightwindowToRemove, weightwindowToAdd
+    cdef int[:] permwindowToRemove, permwindowToAdd
+
+    for jj in range(1, num_windows):
+        weightwindowToRemove = weights[max_window_size-window_size+(jj-1)*window_steps:
+                                       max_window_size-window_size+(jj-1)*window_steps+window_steps,calcIndex]
+        permwindowToRemove = permutations[max_window_size-window_size+(jj-1)*window_steps:
+                                          max_window_size-window_size+(jj-1)*window_steps+window_steps,calcIndex]
+        weightwindowToAdd = weights[max_window_size+(jj-1)*window_steps : max_window_size+(jj-1)*window_steps+window_steps,calcIndex]
+        permwindowToAdd = permutations[max_window_size+(jj-1)*window_steps : max_window_size+(jj-1)*window_steps+window_steps,calcIndex]
+
+        for ll in range(window_steps):
+            weightToRemove = weightwindowToRemove[ll]
+            weightToAdd = weightwindowToAdd[ll]
+            permToRemove = permwindowToRemove[ll]
+            permToAdd = permwindowToAdd[ll]
+
+            total += (weightToAdd - weightToRemove)
+            pmf[permToRemove] -= weightToRemove
+            pmf[permToAdd] += weightToAdd
+
+        for kk in range(wl_fact):
+            norm_pmf[kk] = pmf[kk] / total
+
+        window_weighted_pes[jj] = entropy(norm_pmf) / norm
+        
+    return window_weighted_pes
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+cdef step_windowed_permutation_entropy_surrogates(double[:,:] data, int  window_size, int window_steps, int dim,int max_window_size=-1, int step =1, int w =0, int surr_samples = 1000):
+    cdef int i,ii, jj, kk, ll, ss
+    cdef int wl_fact = c_factorial(dim)
+    cdef int T =data.shape[0]
+    cdef int num_TS=1
+    cdef int[:,:] data_mask = np.ones((T,num_TS), dtype='int32')
+    cdef int patt_time = data.shape[0]-step*(dim-1)
+    if max_window_size ==-1:
+        max_window_size = window_size
+
+    cdef double[:,:] weights = np.zeros((patt_time, num_TS), dtype='float64')
+    cdef int[:,:] permutations = np.zeros((patt_time, num_TS), dtype='int32')
+    cdef int[:,:] patt_mask = np.zeros((patt_time, num_TS), dtype='int32')
+    permutations, patt_mask, patt_time, weights=ordinal_patt_array(data, data_mask, dim=dim,
+                                                                       step=step,weights=w)
+
+    cdef int num_windows = ((patt_time - max_window_size) / window_steps) + 1
+
+    cdef double[:,:] window_weighted_pes = np.zeros((num_windows, surr_samples),dtype='float')
+    cdef double norm = log(wl_fact)/log(2.0)
+
+    # Calculate WPE of first window
+    cdef double total = np.asarray(weights[max_window_size-window_size:max_window_size]).sum()
+    cdef double[:] pmf = np.zeros(wl_fact, dtype='float')
+    cdef double[:] norm_pmf = np.zeros(wl_fact, dtype='float')
+    cdef int p,calcIndex
+    calcIndex = num_TS-1
+
+    for ii in range(window_size):
+        p = permutations[max_window_size-window_size+ii,calcIndex]
+        pmf[p] += weights[max_window_size-window_size+ii,calcIndex]
+
+    for kk in range(wl_fact):
+        norm_pmf[kk] = pmf[kk]/total
+    window_weighted_pes[0]= entropy(norm_pmf) / norm
+
+    # Calculate WPE of next windows
+    cdef double weightToRemove, weightToAdd
+    cdef int permToRemove, permToAdd
+
+    cdef double[:] weightwindowToRemove, weightwindowToAdd
+    cdef int[:] permwindowToRemove, permwindowToAdd
+
+    for jj in range(1, num_windows):
+        weightwindowToRemove = weights[max_window_size-window_size+(jj-1)*window_steps:
+                                       max_window_size-window_size+(jj-1)*window_steps+window_steps,calcIndex]
+        permwindowToRemove = permutations[max_window_size-window_size+(jj-1)*window_steps:
+                                          max_window_size-window_size+(jj-1)*window_steps+window_steps,calcIndex]
+        weightwindowToAdd = weights[max_window_size+(jj-1)*window_steps : max_window_size+(jj-1)*window_steps+window_steps,calcIndex]
+        permwindowToAdd = permutations[max_window_size+(jj-1)*window_steps : max_window_size+(jj-1)*window_steps+window_steps,calcIndex]
+
+        for ll in range(window_steps):
+            weightToRemove = weightwindowToRemove[ll]
+            weightToAdd = weightwindowToAdd[ll]
+            permToRemove = permwindowToRemove[ll]
+            permToAdd = permwindowToAdd[ll]
+
+            total += (weightToAdd - weightToRemove)
+            pmf[permToRemove] -= weightToRemove
+            pmf[permToAdd] += weightToAdd
+
+        for kk in range(wl_fact):
+            norm_pmf[kk] = pmf[kk] / total
+
+        window_weighted_pes[jj] = entropy(norm_pmf) / norm
+        
+    return window_weighted_pes

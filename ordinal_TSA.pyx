@@ -213,7 +213,7 @@ def permutation_entropy(double[:,:] data, long dim,int step =1, int w=0):
     cdef int p
     for ii in range(N):
         p = permutations[ii,0]
-        pmf[p] = pmf[p] + weights[ii]
+        pmf[p] = pmf[p] + weights[ii,0]
     for kk in range(wl_fact):
         norm_pmf[kk] = pmf[kk]/total
     return entropy(norm_pmf)/ norm
@@ -250,19 +250,14 @@ cdef double permutation_entropy_s(int[:] permutations,double[:] weights, long wo
     cdef  double total = 0
     for jj in range(weights.shape[0]):
         total += weights[jj]
-    #time4 = time.time()
-    #print(total,"c time",time2-time1)
 
-    #cdef double[:] pmf = np.zeros(wl_fact)
     cdef double[:] pmf = np.zeros(wl_fact,dtype='float')
     cdef double[:] norm_pmf = np.zeros(wl_fact,dtype='float')
 
-    cdef double weight
-    #permutations = np.asarray(permutations).squeeze()
-    #weights = np.asarray(weights)
     for ii in range(N):
         p = permutations[ii]
-        pmf[p] = pmf[p] + weights[ii]
+        #print(ii,"perm",p)
+        pmf[p] += weights[ii]
     for kk in range(wl_fact):
         norm_pmf[kk] = pmf[kk]/total
     return entropy(norm_pmf)/ norm
@@ -278,7 +273,7 @@ cdef double permutation_entropy_s(int[:] permutations,double[:] weights, long wo
 #@cython.boundscheck(False)
 #@cython.wraparound(False)
 @cython.cdivision(True)
-def sig_testing_w_overlaps(double[:,:] data,int B,int B_w,int windowsize,int dim,int shift, int step=1,int w=0):
+def sig_testing_w_overlaps(double[:,:] data,int B,int B_w,int windowsize,int dim,int shift, int step=1,int w=0,double conf_level = 0.005):
     #w = windowsize
     #B = bootstrap samples, maybe 20,000
     #B_w is the bootstrap window length
@@ -291,17 +286,17 @@ def sig_testing_w_overlaps(double[:,:] data,int B,int B_w,int windowsize,int dim
     cdef int[:,:] data_mask = np.ones((data.shape[0],data.shape[1]), dtype='int32')
 
     #if w == 1:
-    cdef double[:,:] weights = np.zeros((patt_time, num_TS), dtype='float64')
+    cdef double[:,:] weights = np.zeros((patt_time, num_TS), dtype='float')
     cdef int[:,:] permutations = np.zeros((patt_time, num_TS), dtype='int32')
     cdef int[:,:] patt_mask = np.zeros((patt_time, num_TS), dtype='int32')
-    permutations, patt_mask, patt_time, weights = ordinal_patt_array(data, data_mask, dim=dim, step=1,weights=w)
-
-    cdef double[:] lower = np.ones(len(data),dtype='float')
-    cdef double[:] upper = np.ones(len(data),dtype='float')
+    permutations, patt_mask, patt_time, weights = ordinal_patt_array(data, data_mask, dim=dim, step=step,weights=w)
+    #np.random.seed(305)
+    permutations = np.random.randint(0,100,patt_time, dtype='int32').reshape(patt_time,1)
+    #print(permutations[0:5])
     #cdef int num_sur_windows = int(data.shape[0]/B_w)
-    cdef int num_sur_windows = int((data.shape[0]-B_w)/shift)
-
-    print(data.shape,B_w,num_sur_windows)
+    cdef int num_sur_windows = int((patt_time-B_w)/shift)+1
+    #np.random.seed(None)
+    #print(data.shape,B_w,num_sur_windows)
     #permutations = np.asarray(permutations).squeeze()
     #cdef int[:] permutations_c = permutations
     #cdef double[:] weights_c = weights
@@ -309,53 +304,91 @@ def sig_testing_w_overlaps(double[:,:] data,int B,int B_w,int windowsize,int dim
     #This is how many times to sample each window
 
 
-    cdef int max_overlap = B_w - shift +1
+    cdef int max_overlap = int(B_w/shift) +1
     cdef double[:,:,:] pdf = np.zeros((patt_time,B,max_overlap), dtype='float')
     cdef int[:] overlaps = np.zeros(patt_time,dtype='int32')
 
-    cdef int lower_index =int(B*0.01)
-    cdef int upper_index =int(B*0.99)
+    cdef int lower_index =0#int(B*0.01)
+    cdef int upper_index =0#int(B*0.99)
+    cdef double[:] lower = np.zeros(patt_time,dtype='float')
+    cdef double[:] upper = np.zeros(patt_time,dtype='float')
 
     cdef int[:] surrogate = np.zeros(windowsize,dtype='int32')
     cdef int[:] B_w_perms = np.zeros(B_w,dtype='int32')
     cdef double[:] surrogate_weights = np.zeros(windowsize,dtype='float')
+
     cdef double[:] B_w_weights = np.zeros(B_w,dtype='float')
     cdef int[:] r
     cdef double pe_s= 0.0
     print(num_sur_windows,"num windows")
     #Loop over each window
     for i in range(num_sur_windows):
-        time1 = time.time()
+        #time1 = time.time()
         #Then do B shuffles within that window
         left_endpoint = i*shift
-        right_endpoint = i*shift+B_w
-        print(left_endpoint,right_endpoint)
-
+        right_endpoint = left_endpoint+B_w
+        if right_endpoint+shift>=patt_time:
+            right_endpoint=patt_time
+        #print("left to right",left_endpoint,right_endpoint)
+            #sys.exit()
         for s in range(B):
             #r = np.random.randint(0,B_w,windowsize,dtype='int32')
             #timerand1 = time.time()
-            r = np.random.randint(left_endpoint,right_endpoint,windowsize,dtype='int32')
+            r = np.random.randint(left_endpoint,right_endpoint,size=windowsize,dtype='int32')
+            #r = np.arange(left_endpoint,right_endpoint,dtype='int32')
             #timerand2 = time.time()
             #total_rand_time = total_rand_time + timerand2-timerand1
             for kk in range(windowsize):
                 rk = r[kk]
                 surrogate[kk] = permutations[rk,0]
                 surrogate_weights[kk] = weights[rk,0]
-            pe_s =permutation_entropy_s(permutations=surrogate,weights =surrogate_weights,word_length=dim)
+            #print(np.asarray(r),np.asarray(surrogate))
+            #print(np.asarray(permutations))
+            #print(np.asarray(surrogate_weights))
+            #pe_s =permutation_entropy_s(permutations=surrogate,weights =surrogate_weights,word_length=dim,step=step,w=w)
+            pe_s = np.asarray(surrogate).mean()
+            #print(pe_s)
             for ll in range(left_endpoint,right_endpoint):
                 pdf[ll,s,overlaps[ll]] =pe_s
-
+                #print(ll,overlaps[ll])
         for ll in range(left_endpoint,right_endpoint):
             overlaps[ll] +=1
-        time2 =time.time()
-        print(time2-time1," to compute this window")
+        #print(np.asarray(pdf[0]))
+        #time2 =time.time()
+        #print(time2-time1," to compute this window")
+    #sys.exit()
+    print(pdf.shape,patt_time)
+    #sys.exit()
         #print(pdf)
         #np.asarray(pdf).sort()
-    for x in range(num_sur_windows*shift+B_w):
-        print(x,num_sur_windows*shift+B_w)
-        local_slice = np.asarray(pdf[x,0:B,0:overlaps[x]]).flatten()
+    for x in range(patt_time):
+        #print(x,patt_time)
+        #print(pdf.shape)
+        #print(x,(0,B),(0,overlaps[x]))
+        #print(np.asarray(pdf[x,0:B,0:overlaps[x]]))
+        local_slice = np.asarray(pdf[x,0:B,0:overlaps[x]])
+
+        #print(local_slice.shape)
+        local_slice = local_slice.flatten()
+        #print("local_slice",local_slice)
         local_slice.sort()
-        print(local_slice[lower_index],local_slice[upper_index])
+        lower_index = int(conf_level*local_slice.shape[0])
+        upper_index = int((1.0-conf_level)*local_slice.shape[0])
+
+        #print("pdf0       ",np.asarray(pdf[0]).flatten())
+        #print("local_slice",local_slice)
+
+
+
+        #print("lowerI",lower_index)
+        #print("upperI",upper_index)
+
+        #print(local_slice.shape,lower_index,upper_index)
+        #print(x,patt_time,pdf.shape)
+        #print(local_slice[lower_index],local_slice[upper_index])
+        lower[x] = local_slice[lower_index]
+        upper[x] = local_slice[upper_index]
+        #print()
         #if i ==num_sur_windows-1:
         #    for ii in range(left_endpoint,lower.shape[0]):
         #        lower[ii] = lower[ii]*pdf[lower_index]
@@ -374,6 +407,8 @@ def sig_testing_w_overlaps(double[:,:] data,int B,int B_w,int windowsize,int dim
 
 
         #print(time2-time1," of which ",total_rand_time, "was random")
+    print("lower=",np.asarray(lower))
+    print("upper=",np.asarray(upper))
     return lower,upper
 
 
@@ -403,7 +438,7 @@ def sig_testing(double[:,:] data,int B,int B_w,int windowsize,int dim, int step=
     cdef double[:] lower = np.ones(len(data),dtype='float')
     cdef double[:] upper = np.ones(len(data),dtype='float')
     cdef int num_sur_windows = int(data.shape[0]/B_w)
-    print(data.shape,B_w,num_sur_windows)
+    #print(data.shape,B_w,num_sur_windows)
     #permutations = np.asarray(permutations).squeeze()
     #cdef int[:] permutations_c = permutations
     #cdef double[:] weights_c = weights
@@ -441,7 +476,7 @@ def sig_testing(double[:,:] data,int B,int B_w,int windowsize,int dim, int step=
                 upper[jj]=upper[jj]*pdf[upper_index]
                 #lower[i*B_w:(i+1)*B_w] = lower[i*B_w:(i+1)*B_w]*pdf[lower_index]
                 #upper[i*B_w:(i+1)*B_w] = upper[i*B_w:(i+1)*B_w]*pdf[upper_index]
-        print(pdf[lower_index],pdf[upper_index])
+        #print(pdf[lower_index],pdf[upper_index])
         time2 =time.time()
         print(time2-time1)
     return lower,upper
@@ -465,10 +500,19 @@ def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int
     cdef int[:,:] patt_mask = np.zeros((patt_time, num_TS), dtype='int32')
     permutations, patt_mask, patt_time, weights=ordinal_patt_array(data, data_mask, dim=dim,
                                                                        step=step,weights=w)
+    #np.random.seed(305)
+    permutations = np.random.randint(0,100,patt_time, dtype='int32').reshape(patt_time,1)
+    print(permutations[0:5])
+
 
     cdef int num_windows = patt_time - max_window_size + 1
-
     cdef double[:] window_weighted_pes = np.zeros(num_windows,dtype='float')
+
+    for ii in range(num_windows):
+        window_weighted_pes[ii]=np.asarray(permutations[ii:ii+window_size]).mean()
+    return window_weighted_pes
+
+
     cdef double norm = log(wl_fact)/log(2.0)
     cdef double total = np.asarray(weights[max_window_size-window_size:max_window_size]).sum()
 

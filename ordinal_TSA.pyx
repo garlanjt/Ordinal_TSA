@@ -501,16 +501,16 @@ def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int
     permutations, patt_mask, patt_time, weights=ordinal_patt_array(data, data_mask, dim=dim,
                                                                        step=step,weights=w)
     #np.random.seed(305)
-    permutations = np.random.randint(0,100,patt_time, dtype='int32').reshape(patt_time,1)
-    print(permutations[0:5])
+    #permutations = np.random.randint(0,100,patt_time, dtype='int32').reshape(patt_time,1)
+    #print(permutations[0:5])
 
 
     cdef int num_windows = patt_time - max_window_size + 1
     cdef double[:] window_weighted_pes = np.zeros(num_windows,dtype='float')
 
-    for ii in range(num_windows):
-        window_weighted_pes[ii]=np.asarray(permutations[ii:ii+window_size]).mean()
-    return window_weighted_pes
+    #for ii in range(num_windows):
+    #    window_weighted_pes[ii]=np.asarray(permutations[ii:ii+window_size]).mean()
+    #return window_weighted_pes
 
 
     cdef double norm = log(wl_fact)/log(2.0)

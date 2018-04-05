@@ -5,7 +5,8 @@ cimport numpy as np
 import cython
 import sys
 import bottleneck as bn
-
+import itertools
+import re
 
 cdef extern from "math.h":
     double log(double)
@@ -177,28 +178,28 @@ def permutation_entropy(double[:,:] data, long dim,int step =1, int w=0):
 
 
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
-@cython.cdivision(True)
-cdef double permutation_entropy_s(int[:] permutations,double[:] weights, long word_length, int w=0, int step =1):
-    cdef int ii, kk, ll,p
-    cdef int N = permutations.shape[0]
-    cdef long wl_fact = c_factorial(word_length)
-    cdef double norm = log(wl_fact)/log(2.0)
-
-    cdef  double total = 0
-    for jj in range(weights.shape[0]):
-        total += weights[jj]
-
-    cdef double[:] pmf = np.zeros(wl_fact,dtype='float')
-    cdef double[:] norm_pmf = np.zeros(wl_fact,dtype='float')
-
-    for ii in range(N):
-        p = permutations[ii]
-        pmf[p] += weights[ii]
-    for kk in range(wl_fact):
-        norm_pmf[kk] = pmf[kk]/total
-    return entropy(norm_pmf)/ norm
+#@cython.boundscheck(False)
+#@cython.wraparound(False)
+#@cython.cdivision(True)
+#cdef double permutation_entropy_s(int[:] permutations,double[:] weights, long word_length, int w=0, int step =1):
+#    cdef int ii, kk, ll,p
+#    cdef int N = permutations.shape[0]
+#    cdef long wl_fact = c_factorial(word_length)
+#    cdef double norm = log(wl_fact)/log(2.0)
+#
+#    cdef  double total = 0
+#    for jj in range(weights.shape[0]):
+#        total += weights[jj]
+#
+#    cdef double[:] pmf = np.zeros(wl_fact,dtype='float')
+#    cdef double[:] norm_pmf = np.zeros(wl_fact,dtype='float')
+#
+#    for ii in range(N):
+#        p = permutations[ii]
+#        pmf[p] += weights[ii]
+#    for kk in range(wl_fact):
+#        norm_pmf[kk] = pmf[kk]/total
+#    return entropy(norm_pmf)/ norm
 
 
 
@@ -313,6 +314,313 @@ def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int
         else:
             window_weighted_pes[jj] =0.0
     return window_weighted_pes
+
+
+
+
+
+#For handling data with gaps
+def  permutation_entropy_w_nans(double[:,:] data, long dim,int step =1, int w=0):
+
+    """
+    :param data:
+    :param dim:
+    :param step:
+    :param w:
+    :return:
+    Steve's code
+
+
+
+
+
+
+
+    """
+    cdef int ii, kk, ll
+    cdef int T,N
+    T = data.shape[0]
+    N = data.shape[1]
+    cdef int patt_time = T - step * (dim - 1)
+    cdef int[:,:] data_mask = np.ones((data.shape[0],data.shape[1]), dtype='int32')
+    cdef int[:,:] permutations = np.zeros((patt_time, N), dtype='int32')
+    cdef int[:,:] patt_mask = np.zeros((patt_time, N), dtype='int32')
+    cdef double[:,:] weights
+    permutations, patt_mask, patt_time, weights = symbolize_array_w_nans(data, data_mask, dim=dim, step=step,weights=w)
+
+
+    cdef long wl_fact = c_factorial(dim)
+    cdef double norm = log(wl_fact)/log(2.0)
+    cdef double total = bn.nansum(weights)
+    cdef double[:] pmf = np.zeros(wl_fact,dtype='float')
+    cdef double[:] norm_pmf = np.zeros(wl_fact,dtype='float')
+
+    #permutations = np.asarray(permutations).squeeze()
+    #weights = np.asarray(weights)
+    N = permutations.shape[0]
+    cdef int p
+    for ii in range(N):
+        p = permutations[ii,0]
+        pmf[p] = pmf[p] + weights[ii,0]
+    for kk in range(wl_fact):
+        norm_pmf[kk] = pmf[kk]/total
+    return entropy(norm_pmf)/ norm
+
+
+
+
+
+
+
+
+
+
+
+
+@cython.boundscheck(False)
+cdef  symbolize_array_w_nans(double[:, :] data, int[:, :] data_mask, int dim = 2, int step = 1,int weights=0):
+    """Returns symbolified array of ordinal patterns.
+
+    Each data vector (X_t, ..., X_t+(dim-1)*step) is converted to its rank
+    vector. E.g., (0.2, -.6, 1.2) --> (1,0,2) which is then assigned to a
+    unique integer. There are (dim)! possible rank vectors.
+
+    Note that the symb_array is step*(dim-1) shorter than the original array!
+
+
+    Args:
+        array (array, optional): Data array of shape (time, variables).
+        array_mask (bool array, optional): Data mask where False labels masked
+            samples.
+        dim (int, optional): Pattern dimension
+        step (int, optional): Delay of pattern embedding vector.
+        weights (bool, optional): Whether to return array of variances of
+            embedding vectors as weights.
+        verbosity (int, optional): Level of verbosity.
+
+    Returns:
+        Tuple of converted data and new length
+    """
+
+    cdef int T,N
+    T = data.shape[0]
+    N = data.shape[1]
+    cdef int patt_time = T - step * (dim - 1)
+
+    if dim <= 1 or patt_time <= 0:
+        raise ValueError("Dim mist be > 1 and length of delay vector smaller "
+                         "array length.")
+
+    cdef double[:,:] weights_array = np.zeros((patt_time, N), dtype='float64')
+    cdef int[:,:] patt = np.zeros((patt_time, N), dtype='int32')
+    cdef int[:,:] patt_mask = np.zeros((patt_time, N), dtype='int32')
+
+
+
+    # Add noise to destroy ties...
+    #data += (1E-6 * data.std(axis=0)
+    #          * np.random.rand(data.shape[0], data.shape[1]).astype('float64'))
+
+
+    (patt, patt_mask, weights_array) = _symbolize_array_w_nans(data, data_mask, patt, patt_mask, weights_array, dim, step, N,T,weights)
+    return patt, patt_mask, patt_time, weights_array
+
+
+def get_combinadic(double[:] v,dim):
+    cdef int p,i,j
+    if( v[0] <= v[1]):
+        p = 1
+    else:
+        p = 0
+    for i in range(2, dim):
+        for j in range(0, i):
+            if( v[j] <= v[i]):
+                p += c_factorial(i)
+    return p
+
+
+
+
+
+#def get_perm(double[:] v,dim):
+#    #combinadic bug mike
+#    cdef int p,i,j
+#    if( v[0] <= v[1]):
+#        p = 1
+#    else:
+#        p = 0
+#    for i in range(2, dim):
+#        for j in range(0, i):
+#            if( v[j] <= v[i]):
+#                p += c_factorial(i)
+#    return p
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+cdef _symbolize_array_w_nans(
+    double[:,:] array,
+    int[:,:] array_mask,
+    int[:,:] patt,
+    int[:,:] patt_mask,
+    double[:,:] weights,
+    int dim,
+    int step,
+    int N,
+    int T,
+    int w):
+    cdef int n, t, k, i, j, p, tau, start, mask
+    cdef double ave, var
+    cdef double[:] v = np.zeros(dim, dtype='float')
+    #N is the number of time series
+    #T is the number of time points
+    cdef int[:] fac = np.zeros(dim,dtype='int32')
+    for i in range(dim+1):
+        fac[i] =c_factorial(i)
+    start = step*(dim-1)
+    for n in range(0, N):
+        for t in range(start, T):
+            mask = 1
+            if w==1:
+                ave = 0.
+            #form the delay vector x of the form [x(t),x(t-tau),...,x(t-(dim-1)*tau)]
+            for k in range(0, dim):
+                tau = k*step
+                v[k] = array[t - tau, n]
+                if w==1:
+                    ave += v[k]
+                mask *= array_mask[t - tau, n]
+
+            if w==1:
+                #calculate the variance if weighted
+                ave /= dim
+                var = 0.
+                for k in range(0, dim):
+                    var += (v[k] - ave)**2
+                var /= dim
+                weights[t-start, n] = var
+            else:
+                weights[t-start, n] =1.0
+
+            #sort the delay vector
+            if( v[0] < v[1]):
+                p = 1
+            else:
+                p = 0
+            for i in range(2, dim):
+                for j in range(0, i):
+                    if( v[j] < v[i]):
+                        p += fac[i]
+            patt[t-start, n] = p
+            patt_mask[t-start, n] = mask
+
+    return patt, patt_mask, weights
+
+
+def test_get_patterns_cython_w_nans(data,dim=2):
+
+    cdef int T,N
+
+    step =1
+    T = data.shape[0]
+    N = data.shape[1]
+    cdef int patt_time = T - step * (dim - 1)
+    cdef double[:,:] weights
+
+    if dim <= 1 or patt_time <= 0:
+        raise ValueError("Dim mist be > 1 and length of delay vector smaller "
+                         "array length.")
+    cdef int[:,:] data_mask = np.ones((data.shape[0],data.shape[1]), dtype='int32')
+    cdef int[:,:] permutations = np.zeros((patt_time, N), dtype='int32')
+    cdef int[:,:] patt_mask = np.zeros((patt_time, N), dtype='int32')
+    cdef double[:,:] weights_array = np.zeros((patt_time, N), dtype='float64')
+    cdef int[:,:] patt = np.zeros((patt_time, N), dtype='int32')
+    cdef int w = 0
+
+
+    # Add noise to destroy ties...
+    #data += (1E-6 * data.std(axis=0)
+    #          * np.random.rand(data.shape[0], data.shape[1]).astype('float64'))
+
+
+    (patt, patt_mask, weights_array) = _get_patterns_cython_w_nans(data,data_mask, patt, patt_mask, weights_array, dim, step, N,T,w)
+    print(np.asarray(patt))
+    print(np.asarray(patt_mask))
+
+def generate_possible_ordinals(known,m):
+    """
+    m is the embedding dimension
+    known should be a list or sting of known sorted coordinates which range
+    from 0-m-1. For example if x_2<x0 and the rest are np.nan. Then known = [2,0] or '20'
+    """
+    reg_ex_string ="^[0-9]*?"
+    for x in known:
+        reg_ex_string=reg_ex_string+str(x)+"[0-9]*?"
+    reg_ex_string += "$"
+    pattern = re.compile(reg_ex_string)
+    S_m=list(map("".join, itertools.permutations("".join([str(x) for x in xrange(m)]))))
+    possible = []
+    for x in S_m:
+        if pattern.match(x):
+            possible.append(x)
+    return possible
+
+
+def build_combinadic_perm_maps(m):
+    S_m=list(map("".join, itertools.permutations([str(x) for x in xrange(m)])))
+    combinadic_to_perm_map = {}
+    perm_to_combinadic_map = {}
+    for pi in S_m:
+        x = np.asarray([int(d) for d in pi],dtype='double')
+        perm_ints = x.argsort()
+        perm = "".join([str(symbol) for symbol in perm_ints])
+        combinadic = get_combinadic(x,m)
+        combinadic_to_perm_map[combinadic]=perm
+        perm_to_combinadic_map[perm] = combinadic
+    return combinadic_to_perm_map, perm_to_combinadic_map
+
+def get_partial_perm(v,combinadic_to_perm_map, perm_to_combinadic_map,m=-1):
+    """
+    m is the embedding dimension
+    known should be a list of known coordinates which range
+    from 0-m-1. For example if x_2<x0. Then known = [2,0]
+    """
+    if m ==-1:
+        m =len(v)
+    nan_replace = -min(v)*1000
+    #for cord in v:
+    #    if cord==np.nan:v
+    mask = np.isnan(v)
+    str_mask =[]
+    print(mask)
+    for nan_index in xrange(len(mask)):
+        if mask[nan_index]:
+            str_mask.append(str(nan_index))
+    print(v)
+    print(v[mask])
+    v[mask]=nan_replace
+    print(v)
+    partial_perm = combinadic_to_perm_map[get_combinadic(v,m)]
+    #Remove the elements that are in the nan mask
+    print(partial_perm)
+    print(str_mask)
+    for dummy_var in str_mask:
+        partial_perm = partial_perm.replace(dummy_var,"")
+
+
+    print partial_perm
+    return partial_perm
+
+
+
+
+def map_possible_ordinal_to_int(possible,m):
+
+    perms = []
+    for perm_str in possible:
+        perm_array= np.asarray([int(d) for d in perm_str],dtype='double')
+        perms.append(get_combinadic(perm_array,dim=m))
+    return perms
 
 # Below this point is old Significance testing code.
 #

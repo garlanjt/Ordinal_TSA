@@ -622,6 +622,33 @@ def map_possible_ordinal_to_int(possible,m):
         perms.append(get_combinadic(perm_array,dim=m))
     return perms
 
+
+
+# Place for Ian to start working
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+####################################
+
 # Below this point is old Significance testing code.
 #
 # #@cython.wraparound(False)

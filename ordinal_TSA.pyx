@@ -205,7 +205,61 @@ def permutation_entropy(double[:,:] data, long dim,int step =1, int w=0):
 
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int max_window_size=-1, int step =1, int w =0):
+    cdef int i,ii, jj, kk, ll
+    cdef int wl_fact = c_factorial(dim)
+    cdef int T =data.shape[0]
+    cdef int num_TS=1
+    cdef int[:,:] data_mask = np.ones((T,num_TS), dtype='int32')
+    cdef int patt_time = data.shape[0]-step*(dim-1)
+    if max_window_size ==-1:
+        max_window_size = window_size
 
+    cdef double[:,:] weights = np.zeros((patt_time, num_TS), dtype='float64')
+    cdef int[:,:] permutations = np.zeros((patt_time, num_TS), dtype='int32')
+    cdef int[:,:] patt_mask = np.zeros((patt_time, num_TS), dtype='int32')
+    permutations, patt_mask, patt_time, weights=ordinal_patt_array(data, data_mask, dim=dim,
+                                                                       step=step,weights=w)
+
+    cdef int num_windows = patt_time - max_window_size + 1
+    cdef double[:] window_weighted_pes = np.zeros(num_windows,dtype='float')
+
+
+
+    cdef double norm = log(wl_fact)/log(2.0)
+    cdef double total = np.asarray(weights[max_window_size-window_size:max_window_size]).sum()
+
+    cdef double[:] pmf = np.zeros(wl_fact,dtype='float')
+    cdef double[:] norm_pmf = np.zeros(wl_fact,dtype='float')
+    cdef int p,calcIndex
+    calcIndex = num_TS-1
+
+    for ii in range(window_size):
+        p = permutations[max_window_size-window_size+ii,calcIndex]
+        pmf[p]=pmf[p]+weights[max_window_size-window_size+ii,calcIndex]
+
+    for kk in range(wl_fact):
+        norm_pmf[kk] = pmf[kk]/total
+    window_weighted_pes[0]= entropy(norm_pmf)/ norm
+    cdef double weightToRemove, weightToAdd
+    cdef int permToRemove, permToAdd
+
+    for jj in range(1, num_windows):
+        weightToRemove = weights[max_window_size-window_size+jj-1,calcIndex]
+        permToRemove = permutations[max_window_size-window_size+jj-1,calcIndex]
+        weightToAdd = weights[max_window_size-window_size+jj+ window_size-1,calcIndex]
+        permToAdd = permutations[max_window_size-window_size+jj+ window_size-1,calcIndex]
+        total = total - weightToRemove + weightToAdd
+        pmf[permToRemove] = pmf[permToRemove] - weightToRemove
+        pmf[permToAdd] = pmf[permToAdd] + weightToAdd
+        for kk in range(wl_fact):
+            norm_pmf[kk] = pmf[kk] / total
+        window_weighted_pes[jj] = entropy(norm_pmf) / norm
+
+    return window_weighted_pes
 
 
 
@@ -213,7 +267,7 @@ def permutation_entropy(double[:,:] data, long dim,int step =1, int w=0):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
-def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int max_window_size=-1, int step =1, int w =0):
+def windowed_permutation_entropy_small_var(double[:,:] data, int  window_size, int dim,int max_window_size=-1, int step =1, int w =0):
     cdef int i,ii, jj, kk, ll
     cdef int wl_fact = c_factorial(dim)
     cdef int T =data.shape[0]
@@ -249,7 +303,6 @@ def windowed_permutation_entropy(double[:,:] data, int  window_size, int dim,int
         if weights[max_window_size-window_size+ii,calcIndex]>ZERO:
             p = permutations[max_window_size-window_size+ii,calcIndex]
             pmf[p]=pmf[p]+weights[max_window_size-window_size+ii,calcIndex]
-    #print(sum(pmf))
 
     for kk in range(wl_fact):
         if total >ZERO:
@@ -517,35 +570,35 @@ cdef _symbolize_array_w_nans(
     return patt, patt_mask, weights
 
 
-def test_get_patterns_cython_w_nans(data,dim=2):
-
-    cdef int T,N
-
-    step =1
-    T = data.shape[0]
-    N = data.shape[1]
-    cdef int patt_time = T - step * (dim - 1)
-    cdef double[:,:] weights
-
-    if dim <= 1 or patt_time <= 0:
-        raise ValueError("Dim mist be > 1 and length of delay vector smaller "
-                         "array length.")
-    cdef int[:,:] data_mask = np.ones((data.shape[0],data.shape[1]), dtype='int32')
-    cdef int[:,:] permutations = np.zeros((patt_time, N), dtype='int32')
-    cdef int[:,:] patt_mask = np.zeros((patt_time, N), dtype='int32')
-    cdef double[:,:] weights_array = np.zeros((patt_time, N), dtype='float64')
-    cdef int[:,:] patt = np.zeros((patt_time, N), dtype='int32')
-    cdef int w = 0
-
-
-    # Add noise to destroy ties...
-    #data += (1E-6 * data.std(axis=0)
-    #          * np.random.rand(data.shape[0], data.shape[1]).astype('float64'))
-
-
-    (patt, patt_mask, weights_array) = _get_patterns_cython_w_nans(data,data_mask, patt, patt_mask, weights_array, dim, step, N,T,w)
-    print(np.asarray(patt))
-    print(np.asarray(patt_mask))
+# def test_get_patterns_cython_w_nans(data,dim=2):
+#
+#     cdef int T,N
+#
+#     step =1
+#     T = data.shape[0]
+#     N = data.shape[1]
+#     cdef int patt_time = T - step * (dim - 1)
+#     cdef double[:,:] weights
+#
+#     if dim <= 1 or patt_time <= 0:
+#         raise ValueError("Dim mist be > 1 and length of delay vector smaller "
+#                          "array length.")
+#     cdef int[:,:] data_mask = np.ones((data.shape[0],data.shape[1]), dtype='int32')
+#     cdef int[:,:] permutations = np.zeros((patt_time, N), dtype='int32')
+#     cdef int[:,:] patt_mask = np.zeros((patt_time, N), dtype='int32')
+#     cdef double[:,:] weights_array = np.zeros((patt_time, N), dtype='float64')
+#     cdef int[:,:] patt = np.zeros((patt_time, N), dtype='int32')
+#     cdef int w = 0
+#
+#
+#     # Add noise to destroy ties...
+#     #data += (1E-6 * data.std(axis=0)
+#     #          * np.random.rand(data.shape[0], data.shape[1]).astype('float64'))
+#
+#
+#     (patt, patt_mask, weights_array) = _get_patterns_cython_w_nans(data,data_mask, patt, patt_mask, weights_array, dim, step, N,T,w)
+#     print(np.asarray(patt))
+#     print(np.asarray(patt_mask))
 
 def generate_possible_ordinals(known,m):
     """
